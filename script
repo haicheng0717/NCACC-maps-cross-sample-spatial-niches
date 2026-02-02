@@ -1,0 +1,1608 @@
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(harmony)
+library(randomcoloR)
+library(tidydr)
+library(NMF)
+library(GeneNMF)
+#GSE149614
+load("E:/1_cell-cell/Rdata/GSE149614_raw.RData")
+table(seuratdata1@meta.data[["orig.ident"]])
+#GSE189903
+load("E:/1_cell-cell/Rdata/GSE189903_raw.RData")
+table(seuratdata2@meta.data[["orig.ident"]])
+#merge
+seuratdata <- merge(x = seuratdata1, 
+                    y = seuratdata2, 
+                    add.cell.id = c("GSE149614", "GSE189903"))
+head(seuratdata@meta.data)
+tail(seuratdata@meta.data)
+seuratdata$log10GenesPerUMI <- log10(seuratdata$nFeature_RNA) / log10(seuratdata$nCount_RNA)
+seuratdata$mitoRatio <- PercentageFeatureSet(object = seuratdata, pattern = "^MT-")
+seuratdata$rbRatio <- PercentageFeatureSet(object = seuratdata, pattern = "^RP[SL]")
+seuratdata$mitoRatio <- seuratdata@meta.data$mitoRatio / 100
+seuratdata$rbRatio <- seuratdata@meta.data$rbRatio /100
+#quality control
+seuratdata <- subset(x = seuratdata, subset= (nCount_RNA >= 500) &
+                       (nFeature_RNA >= 200) &((nFeature_RNA <= 6000) )&
+                       (log10GenesPerUMI > 0.80) &
+                       (mitoRatio < 0.20) &
+                       (rbRatio < 0.30 ))
+#normalizeData
+seuratdata[["data"]] <- seuratdata[["counts"]]
+seuratdata<-NormalizeData(seuratdata)
+seuratdata <- ScaleData(seuratdata)
+#PCA
+seuratdata <- FindVariableFeatures(seuratdata, selection.method = "vst", nfeatures = 2000)
+seuratdata <- RunPCA(seuratdata, 
+                       features = VariableFeatures(object = seuratdata))
+DimPlot(seuratdata, reduction = "pca")
+ElbowPlot(seuratdata,40)
+#harmony
+seuratdata <- RunHarmony(seuratdata, 
+                           group.by.vars = c("sample"), 
+                           reduction = "pca", 
+                           assay.use = "SCT", 
+                           reduction.save = "harmony")
+#UMAP
+seuratdata <- RunUMAP(seuratdata, 
+                        reduction = "harmony", 
+                        assay = "SCT", 
+                        dims = 1:40)
+seuratdata <- FindNeighbors(object = seuratdata, 
+                              dims=1:40,
+                              reduction = "harmony")
+seuratdata <- FindClusters(seuratdata, 
+                             resolution = 0.4)#可调节
+cols1 <- distinctColorPalette(30)
+DimPlot(seuratdata,label.size = 4,group.by = "SCT_snn_res.0.4",cols = cols1,repel = T,label = T)
+T_NK_Cells_genes <- c("CD3D","CD3G","CD3E","PTPRC","IL7R","NKG7","KLRF1")
+Macrophages_Cells_genes <- c("CD68","CD14","FCGR3A","MARCO","C1QC","SPP1","CD163","C1QB","CD1C","CLEC4C","KIT")
+Epithelial_Cells_genes <- c("KRT19","EPCAM","KRT7","SOX9","HNF4A","DKK1","ALB","TTR","APOA1","SERPINA1")
+Endothelial_Cells_genes <- c("VWF","PECAM1","CDH5","ENG","ACKR1","FCGR2B")
+Plasma_Cells_genes <- c("MZB1","IGHG1","JCHAIN","IGLL5","SSR4")
+B_Cells_genes <- c("CD79A","MS4A1","CD37","BANK1","BCL11A","IGHG1","JCHAIN")
+Fibroblast_Cells_genes <- c("ACTA2","COL1A1","COL1A2","BGN","PDGFRB")
+markerlist<-c("CD3D","CD3G","CD3E","PTPRC","IL7R","NKG7","KLRF1",
+              "CD68","CD14","FCGR3A","MARCO","C1QC","SPP1","CD163","C1QB","CD1C","CLEC4C","KIT",
+              "KRT19","EPCAM","KRT7","SOX9","HNF4A","DKK1","ALB","TTR","APOA1","SERPINA1",
+              "VWF","PECAM1","CDH5","ENG","ACKR1","FCGR2B",
+              "MZB1","IGHG1","JCHAIN","IGLL5","SSR4",
+              "CD79A","MS4A1","CD37","BANK1","BCL11A","IGHG1","JCHAIN",
+              "ACTA2","COL1A1","COL1A2","BGN","PDGFRB")
+save(seuratdata, file="seuratdata_new.RData")
+#UMAP plot
+Idents(seuratdata) <- "celltype"
+Idents(seuratdata) <- factor(Idents(seuratdata), levels =  c("T or NK Cells",
+                                                             "B Cells",
+                                                             "Plasma Cells",
+                                                             "Myeloid Cells",
+                                                             "Epithelial_META",
+                                                             "Epithelial_PROL",
+                                                             "Epithelial_EMT",
+                                                             "Endothelial Cells",
+                                                             "Fibroblasts") )
+DimPlot(seuratdata,label.size = 4,repel = T,label = T)
+dim(seuratdata)
+UMAP <- as.data.frame(seuratdata@reductions$umap@cell.embeddings)
+celltype <- Idents(seuratdata)
+UMAP <- cbind(UMAP,celltype)
+mytheme <- theme_void() + 
+  theme(plot.margin = margin(5.5,15,5.5,5.5)) 
+mycolors <- c("#F2B701","#00BA38","#93AA00","#FF9DA7","#66C5CC","#00B9E3","#619CFF","#A496C2","#B07AA1")
+library(tidydr)
+UMAP <- ggplot(data = UMAP, aes(x = umap_1, y = umap_2)) +
+  geom_point(aes(color = celltype),
+             size = 0.4,
+             alpha = 0.8)+
+  theme_dr(xlength = 0.2, 
+           ylength = 0.2, 
+           arrow = grid::arrow(length = unit(0.1, "inches"), 
+                               ends = 'last', type = "closed")) + 
+  theme(panel.grid = element_blank())+
+  guides(color = guide_legend(override.aes = list(size = 5)))+
+  scale_color_manual(values = mycolors) +
+  scale_fill_manual(values = mycolors)
+#NMF
+#T
+seuratdata_T <- subset(seuratdata, subset = celltype=="T/NK Cells")
+metadata<-seuratdata_T@meta.data
+seuratdata_T <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata_T, assay = "RNA", slot = "counts"),
+  meta.data = metadata 
+)
+seuratdata_T<-NormalizeData(seuratdata_T)
+seuratdata_T <- FindVariableFeatures(seuratdata_T, nfeatures = 2000)
+seuratdata_T <- ScaleData(seuratdata_T)
+seuratdata_T <- runNMF(seuratdata_T, k = 40, assay="RNA")
+seuratdata_T@reductions$NMF
+seuratdata_T <- RunUMAP(seuratdata_T, reduction = "NMF", 
+                        dims=1:40, 
+                        reduction.name = "NMF_UMAP", 
+                        reduction.key = "nmfUMAP_")
+seuratdata_T <- FindNeighbors(object = seuratdata_T, 
+                              dims=1:40,
+                              reduction = "NMF")
+seuratdata_T <- FindClusters(seuratdata_T, 
+                             resolution = 0.3)
+γδ_T_Cells_genes <- c("TRGC1","TRGC2")
+NK_Cells_genes <- c("GNLY","NKG7")
+CD8_T_Cells_genes <- c("CD8A","CD8B")
+Cytotoxic_T_Cells_genes <- c("GZMH","GZMA","GZMB","PRF1")
+Naive_T_Cells_genes <- c("LEF1","CCR7","SELL","TCF7")
+Proliferating_T_Cells_genes <- c("TOP2A","MKI67")
+CD4_T_Cells_genes <- c("CD4")
+Regulatory_T_Cells_genes <- c("FOXP3","IL2RA","CTLA4")
+DimPlot(seuratdata_T, reduction = "NMF_UMAP",
+        group.by = "RNA_snn_res.0.3", label=T)
+#Myeloid
+seuratdata_M <- subset(seuratdata_M, subset = celltype=="Myeloid")
+metadata<-seuratdata_M@meta.data
+seuratdata_M@meta.data<-metadata
+seuratdata_M <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata_M, assay = "RNA", slot = "counts"),
+  meta.data = metadata
+)
+seuratdata_M<-NormalizeData(seuratdata_M)
+seuratdata_M <- ScaleData(seuratdata_M)
+seuratdata_M <- FindVariableFeatures(seuratdata_M, nfeatures = 2000)
+seuratdata_M <- runNMF(seuratdata_M, k = 10, assay="RNA")
+seuratdata_M@reductions$NMF
+seuratdata_M <- RunUMAP(seuratdata_M, reduction = "NMF", 
+                        dims=1:10, 
+                        reduction.name = "NMF_UMAP", 
+                        reduction.key = "nmfUMAP_")
+seuratdata_M <- FindNeighbors(object = seuratdata_M, 
+                              dims=1:10,
+                              reduction = "NMF")
+seuratdata_M <- FindClusters(seuratdata_M, 
+                             resolution = 0.3)
+markerlist<-c("APOE","APOA1",
+              "VCAM1","LYVE1","CXCL12",
+              "SPP1","MMP9",
+              "S100A8","S100A9"
+)
+DimPlot(seuratdata_M, reduction = "NMF_UMAP",
+        group.by = "RNA_snn_res.0.3", label=T)
+#Stromal
+seuratdata_Stromal <- subset(seuratdata, 
+                             subset = celltype=="Endothelial Cells" | 
+                               celltype=="Fibroblasts")
+metadata<-seuratdata_Stromal@meta.data
+seuratdata_Stromal <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata_Stromal, assay = "RNA", slot = "counts"),
+  meta.data = metadata 
+)
+seuratdata_Stromal<-NormalizeData(seuratdata_Stromal)
+seuratdata_Stromal <- ScaleData(seuratdata_Stromal)
+seuratdata_Stromal <- FindVariableFeatures(seuratdata_Stromal, nfeatures = 2000)
+seuratdata_Stromal <- runNMF(seuratdata_Stromal, k = 40, assay="RNA")
+seuratdata_Stromal@reductions$NMF
+seuratdata_Stromal <- RunUMAP(seuratdata_Stromal, reduction = "NMF", 
+                              dims=1:40, 
+                              reduction.name = "NMF_UMAP", 
+                              reduction.key = "nmfUMAP_")
+seuratdata_Stromal <- FindNeighbors(object = seuratdata_Stromal, 
+                                    dims=1:40,
+                                    reduction = "NMF")
+seuratdata_Stromal <- FindClusters(seuratdata_Stromal, 
+                                   resolution = 0.4)
+Endothelial_Cells_genes <- c("VWF","PECAM1","ENG")
+Liver_Sinusoidal_Endothelial_Cells_genes <- c("LYVE1","FCN2","FCN3","CLEC1B","CLEC4G","CLEC4M")
+Arterial_Endothelial_Cells_genes <- c("HEY1","IGFBP3")
+Immune_Vascular_Endothelial_Cells_genes <- c("CCL21","PROX1","PDPN","TBX1")
+Fibroblasts_Cells_genes <- c("ACTA2","COL1A1","COL1A2","BGN")
+vCAFs_Cells_genes <- c("NOTCH3","COL18A1","MYH11")
+mCAFs_Cells_genes <- c("FAP","POSTN","MMP11")
+Pericytes_Cells_genes <- c("RGS5","CSPG4")
+SPP1_Cells_genes <- c("SPP1")
+DimPlot(seuratdata_Stromal, reduction = "NMF_UMAP",
+        group.by = "RNA_snn_res.0.4", label=T) 
+#Epithelial
+library(GSVA)
+library(pheatmap)
+library(clusterProfiler)
+seuratdata<-subset(seuratdata, 
+                   subset = celltype=="Epithelial Cells")
+metadata<-seuratdata@meta.data
+seuratdata <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata, assay = "RNA", layer = "counts"),
+  meta.data = metadata  
+)
+seuratdata<-NormalizeData(seuratdata)
+seuratdata <- FindVariableFeatures(seuratdata, nfeatures = 2000)
+seuratdata <- ScaleData(seuratdata, selection.method = "vst", nfeatures = 2000)
+Idents(seuratdata) <- "annoA"
+Idents(seuratdata) <- factor(Idents(seuratdata), levels =  c("Epithelial_META",
+                                                             "Epithelial_EMT",
+                                                             "Epithelial_PROL") )
+table(Idents(seuratdata))
+exp  =  AverageExpression(seuratdata)[[1]]
+exp  =  as.matrix(exp)
+exp  =  exp[rowSums(exp)>0,] 
+exp[1:4,1:4]
+h_df = read.gmt("h.all.v2025.1.Hs.symbols.gmt")[,c(2,1)]
+h_df$term <- gsub('HALLMARK_','',h_df$term)
+h_list = unstack(h_df)
+params <- gsvaParam(as.matrix(exp), 
+                    h_list, 
+                    minSize = 1, 
+                    maxSize = Inf, 
+                    kcdf = "Poisson", 
+                    tau = 1, 
+                    maxDiff = TRUE, 
+                    absRanking = FALSE)
+GSVA_hall <- gsva(params, verbose = TRUE, BPPARAM = BiocParallel::SerialParam(progressbar = TRUE))
+pheatmap(GSVA_hall,
+         color = colorRampPalette(c("#619CFF", "white", "#FF9DA7"))(50),
+         cluster_cols = TRUE,
+         cluster_rows = TRUE,
+         scale = "row",
+         fontsize_row = 6,     
+         fontsize_col = 6,
+         border_color = "white",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "ward.D2")
+#ST
+library(Banksy)
+library(SummarizedExperiment)
+library(SpatialExperiment)
+library(scuttle)
+library(data.table)
+library(scater)
+library(cowplot)
+library(ggplot2)
+library(rhdf5)
+library(Seurat)
+library(SeuratWrappers)
+library(gridExtra)
+library(pals)
+#HRA000437
+HCC1N<-Load10X_Spatial(
+  data.dir ="E:/1_cell-cell/spatial_data/HRA000437/HCC-1N",  
+  filename = "filtered_feature_bc_matrix.h5", 
+  slice ="HCC-1N")
+#quality control
+head(HCC1N@meta.data)
+HCC1N$log10GenesPerUMI <- log10(HCC1N$nFeature_Spatial) / log10(HCC1N$nCount_Spatial)
+HCC1N$mitoRatio <- PercentageFeatureSet(object = HCC1N, pattern = "^MT-")
+HCC1N$rbRatio <- PercentageFeatureSet(object = HCC1N, pattern = "^RP[SL]")
+HCC1N$mitoRatio <- HCC1N@meta.data$mitoRatio / 100
+HCC1N$rbRatio <- HCC1N@meta.data$rbRatio /100
+VlnPlot(HCC1N, 
+        features = c("nFeature_Spatial", "nCount_Spatial", 
+                     "mitoRatio", "rbRatio", "log10GenesPerUMI"), ncol = 5)
+HCC1N <- subset(x = HCC1N, subset= (nCount_Spatial >= 500) &
+                  (nFeature_Spatial >= 200) &((nFeature_Spatial <= 8000) )&
+                  (log10GenesPerUMI > 0.80) &
+                  (mitoRatio < 0.15) &
+                  (rbRatio < 0.15 ))
+#SpatialExperiment-Function
+Seurat_to_SpaEx <- function(seu, sample_id, img_id) {
+  sce <- Seurat::as.SingleCellExperiment(seu)
+  spatialCoords<-data.frame(seu@images[[img_id]]@boundaries[["centroids"]]@coords)
+  rownames(spatialCoords)<-seu@images[[img_id]]@boundaries[["centroids"]]@cells
+  colnames(spatialCoords)<-c("imagerow","imagecol")
+  spatialCoords <- as.matrix(
+    spatialCoords[, c("imagerow","imagecol")])
+  img <- SpatialExperiment::SpatialImage(
+    x = as.raster(seu@images[[img_id]]@image))
+  imgData <- DataFrame(
+    sample_id = sample_id,
+    image_id = img_id,
+    data = I(list(img)),
+    scaleFactor = seu@images[[img_id]]@scale.factors[["lowres"]])
+  spe <- SpatialExperiment(
+    assays = assays(sce),
+    rowData = rowData(sce),
+    colData = colData(sce),
+    metadata = metadata(sce),
+    reducedDims = reducedDims(sce),
+    altExps = altExps(sce),
+    sample_id = sample_id,
+    spatialCoords = spatialCoords,
+    imgData = imgData
+  )
+  spe
+}
+#Seurat to SpatialExperiment
+sample_id = "HCC1N"
+image_id = "HCC.1N"
+HCC1N_spe <- Seurat_to_SpaEx(seu = HCC1N, sample_id = sample_id, img_id = image_id)
+HCC1N_spe
+#Normalization
+HCC1N_spe <- computeLibraryFactors(HCC1N_spe)
+aname <- "normcounts"
+assay(HCC1N_spe, aname) <- normalizeCounts(HCC1N_spe, log = FALSE)
+#Banksy matrix
+lambda <- c(0, 0.2)
+k_geom <- c(15, 30)
+HCC1N_spe <- Banksy::computeBanksy(HCC1N_spe, assay_name = aname, compute_agf = TRUE, k_geom = k_geom)
+#Banksy
+set.seed(1000)
+HCC1N_spe <- Banksy::runBanksyPCA(HCC1N_spe, use_agf = TRUE, lambda = lambda)
+HCC1N_spe <- Banksy::runBanksyUMAP(HCC1N_spe, use_agf = TRUE, lambda = lambda)
+HCC1N_spe <- Banksy::clusterBanksy(HCC1N_spe, use_agf = TRUE, lambda = lambda, resolution = 1.2)
+HCC1N_spe <- Banksy::connectClusters(HCC1N_spe)
+#position-plot
+cnames <- colnames(colData(HCC1N_spe))
+cnames <- cnames[grep("^clust", cnames)]
+colData(HCC1N_spe) <- cbind(colData(HCC1N_spe), spatialCoords(HCC1N_spe))
+plot_nsp <- plotColData(HCC1N_spe,
+                        x = "imagerow", y = "imagecol",
+                        point_size = 0.6, colour_by = cnames[1]
+)
+plot_bank <- plotColData(HCC1N_spe,
+                         x = "imagerow", y = "imagecol",
+                         point_size = 0.6, colour_by = cnames[2]
+)
+plot_grid(plot_nsp)
+plot_grid(plot_bank)
+plot_grid(plot_nsp+ coord_equal())
+plot_grid(plot_bank+ coord_equal())
+#plot-cluster
+plot_grid(plot_nsp + facet_wrap(~colour_by))
+plot_grid(plot_bank + facet_wrap(~colour_by))
+#plot-UMAP
+rdnames <- reducedDimNames(HCC1N_spe)
+umap_nsp <- plotReducedDim(HCC1N_spe,
+                           dimred = grep("UMAP.*lam0$", rdnames, value = TRUE),
+                           colour_by = cnames[1]
+)
+umap_bank <- plotReducedDim(HCC1N_spe,
+                            dimred = grep("UMAP.*lam0.2$", rdnames, value = TRUE),
+                            colour_by = cnames[2]
+)
+plot_grid(umap_nsp)
+plot_grid(umap_bank)
+#metadata
+head(colData(HCC1N_spe))
+metadata_spe<-data.frame(colData(HCC1N_spe))
+metadat_seu<-HCC1N@meta.data
+metadat_seu$clust_M1_lam0_k50_res1.2<-metadata_spe$clust_M1_lam0_k50_res1.2
+metadat_seu$clust_M1_lam0.2_k50_res1.2<-metadata_spe$clust_M1_lam0.2_k50_res1.2
+HCC1N@meta.data<-metadat_seu
+#cell type marker
+T_Cells_genes <- c("CD3D","CD3G","CD3E","PTPRC")
+Kuffer_Cells_genes <- c("CD68","CD14","FCGR3A","MARCO","C1QC","SPP1","CD163")
+Epithelial_Cells_genes <- c("KRT19","EPCAM","KRT7","SOX9","HNF4A","DKK1")
+Endothelial_Cells_genes <- c("VWF","PECAM1","CDH5","ENG")
+Plasma_Cells_genes <- c("MZB1","IGHG1","JCHAIN")
+B_Cells_genes <- c("CD79A","MS4A1","CD37")
+Fibroblast_Cells_genes <- c("ACTA2","COL1A1","COL1A2")
+markerlist<-c("CD3D","CD3G","CD3E","PTPRC",
+              "CD68","CD14","FCGR3A","MARCO","C1QC","SPP1","CD163",
+              "KRT19","EPCAM","KRT7","SOX9","HNF4A","DKK1",
+              "VWF","PECAM1","CDH5","ENG",
+              "MZB1","IGHG1","JCHAIN",
+              "CD79A","MS4A1","CD37",
+              "ACTA2","COL1A1","COL1A2")
+#dotplot
+p<-DotPlot(HCC1N, 
+           features = markerlist,
+           cols =c("#f0dd93", "#bd4335" ),
+           assay='Spatial',
+           group.by = "clust_M1_lam0.2_k50_res1.2")+ theme_bw()
+ggsave("dotplot.png", plot = p, width = 20, height = 6, units = "in")
+#vlnplot
+dir.create("HCC1N-vlnplot-pt01", showWarnings = FALSE)
+for (gene in markerlist) {
+  p<-VlnPlot(HCC1N, features = gene,pt.size=0.1,
+             group.by = "clust_M1_lam0.2_k50_res1.2") 
+  p1<-p+
+    theme(axis.text = element_text(size = 10),
+          axis.title = element_text(size = 12),
+          plot.title = element_text(size = 14, face = "bold")) 
+  ggsave(filename = paste0("HCC1N-vlnplot-pt01/", gene, ".png"), plot = p1, width = 8, height = 6, units = "in")
+}
+#RCTD
+library(spacexr)
+library(Matrix)
+library(ggplot2)
+library(doParallel)
+library(RColorBrewer)
+library(STdeconvolve)
+spatial_count <- data.frame(GetAssayData(object = HCC1N, slot = "counts"))
+head(spatial_count,10)
+coords <- data.frame(HCC1N@images[["HCC.1N"]]@boundaries[["centroids"]]@coords)
+head(coords)
+rownames(coords)<-colnames(spatial_count)
+colnames(coords)<-c("x","y")
+query  <- SpatialRNA(coords, spatial_count)
+metadata<-seuratdata_for_RCTD@meta.data
+metadata <- metadata %>%
+  mutate(celltype_RCTD = case_when(
+    celltype_RCTD == "T/NK Cells" ~ "T or NK Cells",
+    TRUE ~ celltype_RCTD
+  ))
+seuratdata_for_RCTD@meta.data <- metadata
+seuratdata_for_RCTD<-subset(seuratdata_for_RCTD, 
+                            subset = celltype_RCTD=="B Cells"|
+                              celltype_RCTD=="Endothelial Cells"|
+                              celltype_RCTD=="Epithelial Cells"|
+                              celltype_RCTD=="Fibroblasts"|
+                              celltype_RCTD=="Macrophages"|
+                              celltype_RCTD=="Plasma Cells"|
+                              celltype_RCTD=="T or NK Cells")
+sc_counts <- data.frame(GetAssayData(object = seuratdata_for_RCTD, slot = "counts"))
+Celltype <- as.factor(seuratdata_for_RCTD$celltype_RCTD)
+names(Celltype) <- colnames(seuratdata_for_RCTD)
+reference <- Reference(sc_counts, Celltype) 
+RCTD <- create.RCTD(query, reference, max_cores = 1)
+RCTD <- run.RCTD(RCTD, doublet_mode = "full") 
+weights <- RCTD@results$weights
+norm_weights <- normalize_weights(weights)
+result <- as.matrix(norm_weights)
+local <- RCTD@spatialRNA@coords
+head(local)
+rownames(local_restored) <- rownames(local) 
+display.brewer.all()
+cols<-brewer.pal(8,'Accent')
+local<-local/1000
+local_restored <- data.frame(
+  x = -local$y,  
+  y = local$x    
+)
+vizAllTopics(
+  theta = result,
+  pos = local,
+  topicOrder=seq(ncol(result)),
+  topicCols = cols,
+  r = 0.075)
+#NICHE MODULE
+library(dplyr)
+library(pheatmap)
+folder_path <- "~/RCTD_df"
+files <- list.files(path = folder_path, pattern = "\\.csv$", full.names = TRUE)  
+merged_data <- NULL
+for (file in files) {
+  data <- read.csv(file, row.names = 1)
+  if (is.null(merged_data)) {
+    merged_data <- data
+  } else {
+    merged_data <- bind_rows(merged_data, data)
+  }
+}
+rownames(merged_data) <- gsub("RCTD2_", "", rownames(merged_data))
+meta<-ST@meta.data
+meta$A <- "t"
+metadata<-ST@meta.data
+ST <- CreateSeuratObject(
+  counts = GetAssayData(ST, assay = "SCT", layer = "data"),
+  meta.data = metadata  
+)
+meta$A[rownames(meta) %in% rownames(merged_data)] <- "zzzz"
+ST@meta.data<-meta
+ST <- subset(ST,subset=A=="zzzz" )
+ST<-AddMetaData(ST,metadata =merged_data )
+ST@meta.data[["A"]]<-NULL
+data <- ST@meta.data
+data <- data.frame(barcodes=rownames(data),data)
+group <- data[,1:2]
+table(group$clust_M1_lam0_k50_res1.2)
+exp <- data[,3:ncol(data)]%>%t()
+data_AMS <-data.frame(row.names = rownames(exp))
+for (i in unique(group$clust_M1_lam0_k50_res1.2)) {
+  group_tmp <-group$barcodes[which(group$clust_M1_lam0_k50_res1.2==i)]
+  AMS_es_tmp <-exp[,group_tmp]
+  AMS_es_tmp <-apply(AMS_es_tmp, 1, mean)
+  AMS_es_tmp <-as.data.frame(AMS_es_tmp)
+  colnames(AMS_es_tmp)<-i
+  data_AMS <-cbind(data_AMS,AMS_es_tmp)
+}
+data_AMS <- data_AMS[ , colSums(is.na(data_AMS)) == 0 ]
+pheatmap(data_AMS,
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         clustering_method = "mcquitty",
+         show_rownames = TRUE, 
+         show_colnames = TRUE,
+         scale = "row",
+         show_tree_row = FALSE, 
+         show_tree_col = FALSE,
+         fontsize_row = 7,  
+         fontsize_col = 10)
+#PROGENy
+library(progeny)
+metadata<-seuratdata@meta.data
+metadata <- metadata %>%
+  mutate(annoA = ifelse(SCT_snn_res.0.4 == 16, "Epithelial_IgG", metadata$annoA))
+seuratdata@meta.data<-metadata
+metadata<-seuratdata@meta.data
+seuratdata@meta.data<-metadata
+seuratdata <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata, assay = "RNA", slot = "counts"),
+  meta.data = metadata
+)
+seuratdata<-NormalizeData(seuratdata)
+seuratdata <- FindVariableFeatures(seuratdata, nfeatures = 2000)
+seuratdata <- ScaleData(seuratdata, selection.method = "vst", nfeatures = 2000)
+Idents(seuratdata)<- "annoA"
+table(Idents(seuratdata))
+DimPlot(seuratdata, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+CellsClusters <- data.frame(Cell = names(Idents(seuratdata)), 
+                            CellType = as.character(Idents(seuratdata)), 
+                            stringsAsFactors = FALSE) 
+head(CellsClusters)
+seuratdata <- progeny(seuratdata, scale=FALSE, organism="Human", top=500, perm=1, return_assay = TRUE)
+seuratdata <- Seurat::ScaleData(seuratdata, assay = "progeny") 
+library(viridis)
+progeny_scores_df <- 
+  as.data.frame(t(GetAssayData(seuratdata, slot = "scale.data", 
+                               assay = "progeny"))) %>%
+  rownames_to_column("Cell") %>%
+  gather(Pathway, Activity, -Cell)
+progeny_scores_df <- inner_join(progeny_scores_df, CellsClusters)
+summarized_progeny_scores <- progeny_scores_df %>% 
+  group_by(Pathway, CellType) %>%
+  summarise(avg = mean(Activity), std = sd(Activity))
+summarized_progeny_scores_df <- summarized_progeny_scores %>%
+  dplyr::select(-std) %>%   
+  spread(Pathway, avg) %>%
+  data.frame(row.names = 1, check.names = FALSE, stringsAsFactors = FALSE)
+paletteLength = 100
+myColor = colorRampPalette(c("Darkblue", "white","red"))(paletteLength)
+progenyBreaks = c(seq(min(summarized_progeny_scores_df), 0, 
+                      length.out=ceiling(paletteLength/2) + 1),
+                  seq(max(summarized_progeny_scores_df)/paletteLength, 
+                      max(summarized_progeny_scores_df), 
+                      length.out=floor(paletteLength/2)))
+pheatmap(t(summarized_progeny_scores_df[,-1]),fontsize=14, 
+         fontsize_row = 10, 
+         color=myColor, breaks = progenyBreaks, 
+         main = "PROGENy (500)", angle_col = 45,
+         treeheight_col = 0,  border_color = NA)
+jak_stat_scores <- GetAssayData(seuratdata, slot = "scale.data", assay = "progeny")["JAK-STAT", ]
+seuratdata <- AddMetaData(seuratdata, metadata = jak_stat_scores, col.name = "JAK_STAT_SCORE")
+seuratdata$annoA <- factor(seuratdata$annoA,
+                           levels = c("Epithelial_META",
+                                      "Epithelial_IgG",
+                                      "Epithelial_EMT",
+                                      "Epithelial_PROL"))
+my.colors <- c('#9bc5cc', '#e4c896', '#c8aec8', '#78ab70')
+VlnPlot(seuratdata,
+        features = "JAK_STAT_SCORE",
+        pt.size = 0,
+        group.by = "annoA",
+        cols = my.colors) +           
+  theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        legend.position = "right")
+my_comparisons <- combn(as.character(unique(seuratdata$annoA)),2,simplify = F)
+my_comparisons
+my_comparisons <- my_comparisons[-c(1, 2, 4)]
+my_comparisons
+VlnPlot(seuratdata,
+        features = "JAK_STAT_SCORE",
+        pt.size = 0,
+        group.by = "annoA",
+        cols = my.colors) +
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    legend.position = "right",
+    text = element_text(size   = 10,
+                        family = "Arial Narrow",
+                        face   = "bold",
+                        color  = "black"),
+    axis.text.x = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.text.y = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.title  = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black")
+  )&  
+  stat_compare_means(method="t.test",hide.ns = F,   
+                     comparisons = my_comparisons,                   
+                     label="p.signif",                   
+                     bracket.size=0.8,                  
+                     tip.length=0, 
+                     size=6)&  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
+#UCell
+library(Seurat)
+library(UCell)
+metadata<-seuratdata@meta.data
+seuratdata@meta.data<-metadata
+seuratdata <- CreateSeuratObject(
+  counts = GetAssayData(seuratdata, assay = "RNA", slot = "counts"),
+  meta.data = metadata
+)
+seuratdata<-NormalizeData(seuratdata)
+seuratdata <- FindVariableFeatures(seuratdata, nfeatures = 2000)
+seuratdata <- ScaleData(seuratdata, selection.method = "vst", nfeatures = 2000)
+Idents(seuratdata)<- "annoA"
+Idents(seuratdata) <- factor(Idents(seuratdata), levels =  c("Epithelial_META",
+                                                             "Epithelial_EMT",
+                                                             "Epithelial_PROL") )
+table(Idents(seuratdata))
+gs <- read.gmt("h.all.v2025.1.Hs.symbols.gmt")
+gs$term <- gsub('HALLMARK_','',gs$term)
+gs.list <- gs %>% split(.$term) %>% lapply( "[[", 2)
+seuratdata <- AddModuleScore_UCell(seuratdata,features = gs.list)
+save_path <- "~/figure/UCell3type"
+if (!dir.exists(save_path)) {
+  dir.create(save_path)
+}
+library(stringr)
+library(viridis)
+a <- colnames(seuratdata@meta.data) %>% str_subset("_UCell")
+my.colors <- c("#66C5CC","#00B9E3","#619CFF")
+for (feature in a) {
+  p <- VlnPlot(seuratdata,
+               features = feature,
+               pt.size = 0,
+               cols = my.colors) +           
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+          legend.position = "right")
+  filename <- paste0(save_path, "/", feature, ".png")
+  ggsave(filename, plot = p, width = 6, height = 6, dpi = 600, units = "in")
+}
+
+metadata<-seuratdata@meta.data
+metadata <- metadata %>%
+  mutate(annoA = ifelse(SCT_snn_res.0.4 == 16, "Epithelial_IgG", metadata$annoA))
+seuratdata@meta.data<-metadata
+Idents(seuratdata)<- "annoA"
+Idents(seuratdata) <- factor(Idents(seuratdata), levels =  c("Epithelial_META",
+                                                             "Epithelial_IgG",
+                                                             "Epithelial_EMT",
+                                                             "Epithelial_PROL") )
+my.colors <- c("#66C5CC","#0260A0","#00B9E3","#619CFF")
+save_path <- "~/figure/UCell4type"
+if (!dir.exists(save_path)) {
+  dir.create(save_path)
+}
+for (feature in a) {
+  p <- VlnPlot(seuratdata,
+               features = feature,
+               pt.size = 0,
+               cols = my.colors) +           
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+          legend.position = "right")
+  filename <- paste0(save_path, "/", feature, ".png")
+  ggsave(filename, plot = p, width = 6, height = 6, dpi = 600, units = "in")
+}
+#DEG
+library(EnhancedVolcano)
+deg=FindMarkers(seuratdata,
+                ident.1 = "Epithelial_IgG",ident.2 = "Plasma Cells",
+                group.by = "annoA",
+                logfc.threshold = 0.25,
+                test.use = "wilcox")
+deg$group <- case_when(
+  deg$avg_log2FC > 0 ~ "up",
+  deg$avg_log2FC < 0 ~ "down"
+)
+deg=FindMarkers(seuratdata,
+                ident.1 = "Epithelial Cells",ident.2 = "Epithelial IgG",
+                group.by = "annoA",
+                logfc.threshold = 0.25,
+                test.use = "wilcox")
+deg$group <- case_when(
+  deg$avg_log2FC > 0 ~ "up",
+  deg$avg_log2FC < 0 ~ "down"
+)
+deg<-DEG_Epithelial_IgG_VS_Epithelial_Cells
+deg3 <- deg %>%
+  mutate(
+    neg_log10 = -log10(p_val_adj),               
+    rnk = rank(-neg_log10, ties.method = "first") 
+  )
+idx <- which(deg3$neg_log10 > 295)
+n <- length(idx)
+new_val <- seq(100, 295, length.out = n)
+ord <- order(deg3$neg_log10[idx])  
+deg3$neg_log10_new <- deg3$neg_log10
+deg3$neg_log10_new[idx[ord]] <- new_val     
+deg3$p_val_adj_jit <- 10^(-deg3$neg_log10_new)
+EnhancedVolcano(
+  deg3,
+  lab      = rownames(deg),
+  selectLab = c('JCHAIN','MZB1','KRT8','KRT18','APOA4'),
+  x        = 'avg_log2FC',
+  y        = 'p_val_adj_jit',
+  drawConnectors = TRUE,
+  pointSize = 2.0,
+  widthConnectors = 0.95,
+  colConnectors = 'black',
+  labSize       = 3.5,
+  arrowheads = TRUE, 
+  endsConnectors = 'last')
+#GO
+library(enrichplot)
+library(gground)
+library(ggprism)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+use_pathway <- read_csv("GO_selected_final.csv")
+use_pathway <- use_pathway[-1]
+deg <- group_by(use_pathway, Type) %>%
+  top_n(5, wt = -p.adjust) %>%
+  group_by(p.adjust) %>%
+  top_n(1, wt = Count) %>%
+  ungroup() %>%
+  mutate(Type = factor(Type, 
+                       levels = rev(c("META","IgG","EMT","PROL")))) %>%
+  dplyr::arrange(Type, p.adjust) %>%
+  mutate(Description = factor(Description, levels = Description)) %>%
+  tibble::rowid_to_column('index')
+width <- 0.5
+xaxis_max <- max(-log10(deg$p.adjust)) + 1
+rect.data <- group_by(deg, Type) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  mutate(
+    xmin = -3 * width,
+    xmax = -2 * width,
+    ymax = cumsum(n),
+    ymin = lag(ymax, default = 0) + 0.6,
+    ymax = ymax + 0.4
+  )
+my_text <- element_text(
+  size   = 12,
+  family = "Arial Narrow",
+  face   = "bold",
+  color  = "black"
+)
+pal <- c("#D9A501","#4CA373","#4A7ACC","#E68A94")
+pal <- adjustcolor(pal, alpha.f = 0.4)
+enrichment_plot <- deg %>%
+  ggplot(aes(-log10(p.adjust), y = index, fill = Type)) +
+  geom_col(
+    aes(y = Description), width =0.6, alpha =0.4    #透明度
+  ) +
+  geom_text(
+    aes(x =0.05, label = Description),
+    hjust =0, size =5
+  ) +
+  geom_point(
+    aes(x = -width, size = Count),
+    shape =21
+  ) +
+  geom_text(
+    aes(x = -width, label = Count)
+  ) +
+  scale_size_continuous(name ='Count', range = c(5,12)) +
+  geom_rect(
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = Type),
+    data = rect.data,
+    inherit.aes = FALSE, alpha = 0.4    #透明度
+  )+
+  geom_text(
+    aes(x = (xmin + xmax) /2, y = (ymin + ymax) /2, label = Type),
+    data = rect.data,
+    inherit.aes =FALSE
+  ) +
+  geom_segment(
+    aes(x =0, y =0, xend = xaxis_max, yend =0),
+    linewidth =1.5,
+    inherit.aes =FALSE
+  ) +
+  labs(y =NULL) +
+  scale_fill_manual(name ='Cateuse_pathway', values = pal) +
+  scale_colour_manual(values = pal) +
+  scale_x_continuous(
+    breaks = seq(0, xaxis_max,2),
+    expand = expansion(c(0,0))
+  ) +
+  theme_prism() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.title = element_text()
+  )
+#SCENIC
+library(SCopeLoomR)
+library(AUCell)
+library(SCENIC)
+library(Seurat)
+library(dplyr)
+library(KernSmooth)
+library(RColorBrewer)
+library(plotly)
+library(BiocParallel)
+library(grid)
+library(ComplexHeatmap)
+library(data.table)
+library(patchwork)
+library(ggplot2) 
+library(stringr)
+library(circlize)
+library(reshape2)
+library(stringr)
+metadata<-seuratdata@meta.data
+metadata <- metadata %>%
+  mutate(annoA = ifelse(SCT_snn_res.0.4 == 16, "Epithelial_IgG", metadata$annoA))
+seuratdata@meta.data<-metadata
+loom <- open_loom('sc_SCENIC.loom') 
+regulons_incidMat <- get_regulons(loom, column.attr.name="Regulons")
+regulons_incidMat[1:4,1:4] 
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonAUC <- get_regulons_AUC(loom,column.attr.name='RegulonsAUC')
+regulonAucThresholds <- get_regulon_thresholds(loom)
+embeddings <- get_embeddings(loom)  
+close_loom(loom)
+tail(regulonAucThresholds[order(as.numeric(names(regulonAucThresholds)))])
+rownames(regulonAUC)[1:5]
+names(regulons)[1:5]
+colnames(regulonAUC)[1:5]
+seuratdata@meta.data$Barcode = colnames(seuratdata)
+seuratdata = subset(seuratdata, Barcode %in% colnames(regulonAUC)) # 提取抽样后的细胞
+sub_regulonAUC <- regulonAUC[,match(colnames(seuratdata),colnames(regulonAUC))]
+identical(colnames(sub_regulonAUC), colnames(seuratdata))
+cellClusters <- data.frame(row.names = colnames(seuratdata), 
+                           celltype = as.character(seuratdata$annoA))
+table(seuratdata@meta.data$annoA)
+annoA <- data.frame(row.names = colnames(seuratdata), 
+                    celltype = seuratdata$annoA)
+sub_regulonAUC[1:4,1:4] 
+cellTypes = annoA
+selectedResolution <- "celltype" 
+cellsPerGroup <- split(rownames(cellTypes), 
+                       cellTypes[,selectedResolution])
+sub_regulonAUC <- sub_regulonAUC[onlyNonDuplicatedExtended(rownames(sub_regulonAUC)),] 
+dim(sub_regulonAUC)
+sub_regulonAUC[1:5,1:5]
+rss <- calcRSS(AUC=getAUC(sub_regulonAUC), 
+               cellAnnotation=cellTypes[colnames(sub_regulonAUC), selectedResolution]) 
+rss=na.omit(rss) 
+class(rss)
+dim(rss)
+head(rss)
+head(rss)
+rssPlot <- plotRSS(rss, varName = "Cell_type", thr=0.01) 
+rssPlot$plot
+rss_data <- rssPlot$plot$data
+rss_data<-dcast(rss_data, 
+                Topic~rss_data$Cell_type,
+                value.var = 'Z')
+rownames(rss_data) <- rss_data[,1]
+rss_data <- rss_data[,-1]
+colnames(rss_data)
+rss_summary <- data.frame(
+  TF = rownames(rss_data),
+  Max_Zscore = apply(rss_data, 1, max),  
+  MaxCluster = colnames(rss_data)[apply(rss_data, 1, which.max)]  
+)
+head(rss_summary)
+table(rss_summary$MaxCluster)
+rss_summary$gene <- gsub("\\(\\+\\)|\\(\\-\\)", "", rss_summary$TF)
+rss_summary$regulation <- ifelse(str_detect(rss_summary$TF, "\\(\\+\\)"), "Pos", "Neg")
+head(rss_summary)
+top10_TFs_df = rss_summary[rss_summary$regulation == "Pos", ] 
+top10_TFs_df <- top10_TFs_df %>%
+  # top10_TFs_df <- rss_summary %>%
+  group_by(MaxCluster) %>%
+  slice_max(order_by = Max_Zscore, n = 10)
+head(top10_TFs_df)
+table(top10_TFs_df$MaxCluster)
+plot_celltypes = unique(top10_TFs_df$MaxCluster)
+top10_TFs_df <- top10_TFs_df %>%
+  mutate(MaxCluster = factor(MaxCluster, levels = plot_celltypes, ordered = TRUE)) %>%
+  arrange(MaxCluster)
+top10_TFs = top10_TFs_df[top10_TFs_df$MaxCluster %in% plot_celltypes, ]$TF
+top10_TFs
+sub_rssPlot <- plotRSS(rss[top10_TFs, plot_celltypes], varName = "Cell_type", thr=0.01, 
+                       col.low = '#330066', col.mid = '#66CC66', col.high = '#FFCC33')
+sub_rssPlot$plot
+reg = read.csv("E:/1_cell-cell/Result_0728/SCENIC/regulons.csv")
+head(reg)
+row1 <- as.character(reg[1, ])
+row2 <- as.character(reg[2, ])
+new_names <- ifelse(nchar(row1) > 0, row1, row2)
+new_names <- mapply(function(x, y) {
+  if(nchar(x) > 0 & nchar(y) > 0) {
+    paste0(x, "_", y)
+  } else if(nchar(x) > 0) {
+    x
+  } else {
+    y
+  }
+}, row1, row2, USE.NAMES = FALSE)
+colnames(reg) <- new_names
+reg <- reg[-c(1,2), ]
+head(reg)
+colnames(reg)
+head(reg[, c("TF", "TargetGenes")])
+parse_target_info <- function(tf, s) {
+  pattern <- "\\('([^']+)',\\s*([0-9\\.eE+-]+)\\)"
+  matches <- str_match_all(s, pattern)[[1]]
+  if(nrow(matches) == 0) return(data.frame(TF = character(), Gene = character(), Score = numeric()))
+  data.frame(
+    TF = rep(tf, nrow(matches)),
+    Gene = matches[,2],
+    Score = as.numeric(matches[,3]),
+    stringsAsFactors = FALSE
+  )
+}
+TF_Genes_score <- do.call(rbind, lapply(seq_len(nrow(reg)), function(i) {
+  parse_target_info(reg$TF[i], reg$TargetGenes[i])
+}))
+head(TF_Genes_score)
+TF_Genes_score = unique(TF_Genes_score) 
+head(TF_Genes_score)
+range(TF_Genes_score$Score)
+table(TF_Genes_score$Score >= 1)  
+hist(TF_Genes_score$Score)
+TF_GeneNum = TF_Genes_score %>%
+  ungroup() %>%
+  group_by(TF) %>%
+  summarise(Freq = n(), .groups = "drop")
+TF_GeneNum <- as.data.frame(TF_GeneNum)
+head(TF_GeneNum)
+TF_GeneNum$TF_genenum = paste0(TF_GeneNum$TF, "(", TF_GeneNum$Freq, ")")
+head(TF_GeneNum)
+scenic_res = getAUC(sub_regulonAUC) %>% as.matrix()
+scenic_res[1:5,1:5]
+rownames(scenic_res)[1:5]
+scenic_res_pos <- scenic_res[grep("\\(\\+\\)", rownames(scenic_res)), ]
+scenic_res_pos[1:5, 1:5]
+tf_names <- gsub("\\(\\+\\)", "", rownames(scenic_res_pos))
+tf_map <- setNames(TF_GeneNum$TF_genenum, TF_GeneNum$TF) # 创建 TF 名称到 TF_genenum 的映射
+rownames(scenic_res_pos) <- tf_map[tf_names]
+scenic_res_pos <- scenic_res_pos[!is.na(rownames(scenic_res_pos)), ]
+dim(scenic_res_pos)
+scenic_res_pos[1:5, 1:5]
+seuratdata[["scenic_pos_genenum"]] <- SeuratObject::CreateAssayObject(counts = scenic_res_pos)
+seuratdata <- SeuratObject::SetAssayData(seuratdata, slot = "scale.data",
+                                         new.data = scenic_res_pos, assay = "scenic_pos_genenum")
+seuratdata
+rss_summary[1:10,1:10]
+table(rss_summary$MaxCluster)
+TF_rss_df = rss_summary[rss_summary$MaxCluster %in% paste0("Cluster", c(1,3,6)), ]
+TF_rss_df = rss_summary
+head(TF_rss_df)
+table(TF_rss_df$MaxCluster)
+TF_rss_df = TF_rss_df[TF_rss_df$regulation == "Pos", ] 
+top10_TFs_data = TF_rss_df %>% group_by(MaxCluster) %>% top_n(10, Max_Zscore)
+head(top10_TFs_data)
+table(top10_TFs_data$MaxCluster)
+
+plot_order = c("Epithelial_META",
+               "Epithelial_IgG",
+               "Epithelial_EMT",
+               "Epithelial_PROL")
+top10_TFs_data$subcelltype = top10_TFs_data$MaxCluster
+top10_TFs_data <- top10_TFs_data %>%
+  mutate(subcelltype = factor(subcelltype, levels = plot_order, ordered = TRUE))
+top10_TFs_data <- top10_TFs_data %>%
+  arrange(subcelltype)
+head(top10_TFs_data)
+DefaultAssay(seuratdata) = "scenic_pos_genenum"
+head(TF_GeneNum)
+rownames(TF_GeneNum) = TF_GeneNum$TF
+markergenes = TF_GeneNum[top10_TFs_data$gene, "TF_genenum"]
+markergenes
+sub_seu = subset(seuratdata, annoA %in% plot_order)
+table(sub_seu$annoA)
+Idents(sub_seu) <- "annoA"
+Idents(sub_seu) <- factor(Idents(sub_seu), levels =  c("Epithelial_META",
+                                                       "Epithelial_IgG",
+                                                       "Epithelial_EMT",
+                                                       "Epithelial_PROL") )
+Dotplot_SCENIC <- DotPlot(sub_seu,
+                          features = markergenes,
+                          cols = c("#f0dd93", "#bd4335")) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    panel.grid = element_blank(),
+    axis.title.x = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    axis.title.y = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    axis.text.y = element_text(angle = 0, hjust = 0.5, vjust = 0.5,
+                               size = 12, family = "Arial Narrow Bold", color = "black"),
+    
+    axis.text.x = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    legend.text  = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    legend.title = element_text(size = 12, family = "Arial Narrow Bold", color = "black")
+  ) +
+  coord_flip()
+Dotplot_SCENIC+scale_color_gradient2(low = "#619CFF", mid = "white", high = "#FF9DA7")
+#bulk
+library(SCIPAC)
+json <-function(jsonFile){
+  library(rjson) 
+  json_File <- fromJSON(file=jsonFile)  
+  json_Info <- data.frame(filesName = c(),TCGA_Barcode = c())  
+  for(i in 1:length(json_File)){  
+    TCGA_Barcode <- json_File[[i]][["associated_entities"]][[1]][["entity_submitter_id"]]  
+    file_name <- json_File[[i]][["file_name"]]  
+    json_Info <- rbind(json_Info,data.frame(filesName = file_name,TCGA_Barcode = TCGA_Barcode))  
+  }
+  rownames(json_Info) <- json_Info[,1]  
+  json_Info <-json_Info[-1]  
+  return(json_Info)
+}
+Info <- json(jsonFile = "metadata.cart.LIHC.json")  
+View(Info)
+RNAseq = function(path1,Info,data_type){  
+  datamatrix = data.frame()  
+  for(wd in path1){  
+    Path2 <- unlist(strsplit(wd,"/"))  
+    filename <- Path2[length(unlist(strsplit(wd,"/")))]  
+    message(paste0("提示:正在读入文件，需等待几分钟:\n",filename))  
+    Exp <- read.table(wd,comment.char = "#",header = T,sep = "\t")  
+    Exp = Exp[-c(1:4),]  
+    if(wd == path1[1]){  
+      Exp = Exp[,c("gene_id","gene_name","gene_type",data_type)]  
+      colnames(Exp) <- c("gene_id","gene_name","gene_type",Info[filename,"TCGA_Barcode"])  
+      datamatrix = Exp  
+    }else{  
+      Exp = Exp[,c("gene_id",data_type)]  
+      colnames(Exp) <- c("gene_id",Info[filename,"TCGA_Barcode"])  
+      datamatrix = merge(datamatrix,Exp,by = "gene_id")  
+    }
+  }
+  return(datamatrix)
+}
+path1 = dir(path = "gdc_download",pattern = ".rna_seq.augmented_star_gen$",full.names = T,recursive = T)
+counts_all = RNAseq(path1 = path1, Info = Info, data_type ="unstranded")  
+tpm_all = RNAseq(path1 = path1, Info = Info, data_type ="tpm_unstranded")
+fpkm_all = RNAseq(path1 = path1, Info = Info, data_type ="fpkm_unstranded")
+fpkm_uq_all = RNAseq(path1 = path1, Info = Info, data_type ="fpkm_uq_unstranded")
+save(counts_all,file = "lihc_counts_all.Rdata")
+save(tpm_all,file = "lihc_tpm_all.Rdata")
+save(fpkm_all,file = "lihc_fpkm_all.Rdata")
+save(fpkm_uq_all,file = "lihc_fpkm_uq_all.Rdata")
+clin <- fread("~/LIHC/clinical/clinical.tsv",data.table = F)
+colnames(clin) <- gsub("demographic\\.", "", colnames(clin))
+colnames(clin) <- gsub("diagnoses\\.", "", colnames(clin))
+head(clin)
+colnames(clin)
+clin_time <- clin %>% 
+  dplyr::select(cases.submitter_id,
+                vital_status,
+                days_to_death,
+                days_to_last_follow_up,
+                age_at_index,
+                gender,
+                ajcc_pathologic_t,
+                ajcc_pathologic_m,
+                ajcc_pathologic_n,
+                ajcc_pathologic_stage) %>%
+  dplyr::filter(!duplicated(cases.submitter_id))
+clin_merge <- clin_time %>% 
+  dplyr::mutate(OS.time = case_when(vital_status == "Alive" ~ days_to_last_follow_up,
+                                    vital_status == "Dead" ~ days_to_death)) %>%
+  dplyr::mutate(OS = case_when(vital_status == "Alive" ~ 0,
+                               vital_status == "Dead" ~ 1)) %>%
+  dplyr::mutate(gender = case_when(gender == "female" ~ 1,
+                                   gender == "male" ~ 2))
+clin_merge1 <- clin_merge %>% 
+  rename(
+    age = age_at_index,  
+    T = ajcc_pathologic_t,  
+    M = ajcc_pathologic_m,  
+    N = ajcc_pathologic_n,  
+    stage = ajcc_pathologic_stage  #
+  )
+head(clin_merge1)
+clin_merge1[clin_merge1 == "'--"] <- NA
+clin_merge2 <- clin_merge1 %>%
+  select(cases.submitter_id, OS, OS.time, gender, age, T, M, N, stage ) %>%
+  na.omit()
+rownames(clin_merge2) <- clin_merge2$cases.submitter_id
+clin_merge2 <- clin_merge2[,-1]
+head(clin_merge2)
+Info$clinic_name <- substr(Info$TCGA_Barcode, 1, 12)
+Info_filtered <- Info[Info$clinic_name %in% rownames(clin_merge2), ]
+Info_filtered <- Info_filtered[substr(Info_filtered$TCGA_Barcode, 14, 16) != "11A", ]
+RNAseq = function(path1,Info,data_type){  
+  datamatrix = data.frame()  
+  for(wd in path1){  
+    Path2 <- unlist(strsplit(wd,"/"))  
+    filename <- Path2[length(unlist(strsplit(wd,"/")))]  
+    message(paste0("提示:正在读入文件，需等待几分钟:\n",filename))  
+    Exp <- read.table(wd,comment.char = "#",header = T,sep = "\t")  
+    Exp = Exp[-c(1:4),]  
+    if(wd == path1[1]){  
+      Exp = Exp[,c("gene_id","gene_name","gene_type",data_type)]  
+      colnames(Exp) <- c("gene_id","gene_name","gene_type",Info[filename,"TCGA_Barcode"])  
+      datamatrix = Exp  
+    }else{  
+      Exp = Exp[,c("gene_id",data_type)]  
+      colnames(Exp) <- c("gene_id",Info[filename,"TCGA_Barcode"])  
+      datamatrix = merge(datamatrix,Exp,by = "gene_id")  
+    }
+  }
+  return(datamatrix)
+}
+path1 = dir(path = "gdc_download",pattern = ".rna_seq.augmented_star_gen$",full.names = T,recursive = T)
+counts_all2 = RNAseq(path1 = path1, Info = Info_filtered, data_type ="unstranded")  
+tpm_all2 = RNAseq(path1 = path1, Info = Info_filtered, data_type ="tpm_unstranded")
+fpkm_all2 = RNAseq(path1 = path1, Info = Info_filtered, data_type ="fpkm_unstranded")
+fpkm_uq_all2 = RNAseq(path1 = path1, Info = Info_filtered, data_type ="fpkm_uq_unstranded")
+cols_to_remove <- grep("^NA\\.(x|y)", names(counts_all2))
+counts_all2 <- counts_all2[, -cols_to_remove]
+tpm_all2 <- tpm_all2[, -cols_to_remove]
+fpkm_all2 <- fpkm_all2[, -cols_to_remove]
+fpkm_uq_all2 <- fpkm_uq_all2[, -cols_to_remove]
+tpm_all2 <- tpm_all2[tpm_all2$gene_type == "protein_coding", ]
+duplicated_genes <- tpm_all2$gene_name[duplicated(tpm_all2$gene_name)]
+table(duplicated_genes) 
+tpm_all2 <- tpm_all2[!duplicated(tpm_all2$gene_name), ]
+row.names(tpm_all2) <- tpm_all2$gene_name
+tpm_all2 <- tpm_all2[, !names(tpm_all2) %in% c("gene_id", "gene_type", "gene_name")]
+colnames(tpm_all2) = substr(colnames(tpm_all2), 1, 12)
+hmExp=t(tpm_all2)
+hmExp=hmExp[rownames(clin_merge2),]
+hmExp=as.data.frame(hmExp)
+rt=t(hmExp)
+all(colnames(rt) == rownames(clin_merge2))
+table(metadata$celltype)
+seuratdata@meta.data<-metadata
+expr <- GetAssayData(seuratdata, assay = 'RNA',layer = 'counts') 
+expr=as.matrix(expr)
+meta <- seuratdata@meta.data
+sc.bulk.prec <- preprocess.sc.bulk.dat(expr, rt, hvg = 1000)
+sc.dat.prep <- sc.bulk.prec$sc.dat.preprocessed
+bulk.dat.prep <- sc.bulk.prec$bulk.dat.preprocessed
+pca.res <- sc.bulk.pca(sc.dat.prep, bulk.dat.prep, do.pca.sc = FALSE, n.pc = 60)
+sc.dat.dim.redu <- pca.res$sc.dat.rot
+bulk.dat.dim.redu <- pca.res$bulk.dat.rot
+ct.res <- seurat.ct(sc.dat.dim.redu, res = 1.5)
+clin_merge2$OS.time <- as.numeric(as.character(clin_merge2$OS.time))
+leq.zero.idx <- which(clin_merge2$OS.time == 0.0)
+clin_merge2 <- clin_merge2[-c(leq.zero.idx), ]
+bulk.dat.dim.redu <- bulk.dat.dim.redu[rownames(clin_merge2), ]
+y <- clin_merge2[, c("OS.time", "OS")] %>% as.matrix()
+colnames(y) <- c("time", "status")
+all(rownames(bulk.dat.dim.redu) == rownames(y))
+SCIPAC.res <- SCIPAC(bulk.dat = bulk.dat.dim.redu, y = y,
+                     family = "cox", ct.res = ct.res, 
+                     ela.net.alpha = 0.4, bt.size = 50, 
+                     numCores = 1, CI.alpha = 0.05, nfold = 10)
+obj <- AddMetaData(seuratdata, metadata = SCIPAC.res)
+table(SCIPAC.res$sig)
+p1 <- FeaturePlot(obj, "Lambda.est", order=T) +
+  scale_color_gradientn(colours = rev(brewer.pal(11,"RdBu")))+
+  ggtitle("Lambda (Tumor Status)")
+p2 <- DimPlot(obj, group.by="sig") + ggtitle("sig")
+p1+p2
+table(obj@meta.data[["celltype"]])
+Idents(obj) <- "celltype"
+mycolors <- c("#F2B701","#00BA38","#93AA00","#FF9DA7",
+              "#66C5CC","#0260A0","#00B9E3","#619CFF",
+              "#A496C2","#B07AA1")
+Dotplot_survive<-DotPlot(obj,
+                         features = "Lambda.est",
+                         cols = c("#f0dd93", "#bd4335")) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    panel.grid = element_blank(),
+    axis.title.x = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    axis.title.y = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    axis.text.x = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    axis.text.y = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    legend.text  = element_text(size = 12, family = "Arial Narrow Bold", color = "black"),
+    legend.title = element_text(size = 12, family = "Arial Narrow Bold", color = "black")
+  )
+Dotplot_survive
+library(Biobase)
+library(BayesPrism)
+library(stringr)
+library(reshape2)
+library(limma)
+library(survival)
+library(cutoff)
+library(ggpubr)
+library(survminer)
+library(GEOquery)
+tpm_all2 <- tpm_all2[tpm_all2$gene_type == "protein_coding", ]
+duplicated_genes <- tpm_all2$gene_name[duplicated(tpm_all2$gene_name)]
+table(duplicated_genes) 
+tpm_all2 <- tpm_all2[!duplicated(tpm_all2$gene_name), ]
+row.names(tpm_all2) <- tpm_all2$gene_name
+tpm_all2 <- tpm_all2[, !names(tpm_all2) %in% c("gene_id", "gene_type", "gene_name")]
+colnames(tpm_all2) = substr(colnames(tpm_all2), 1, 12)
+Idents(seuratdata) <- 'celltype'
+sc.dat<-GetAssayData(object = seuratdata, assay = "RNA", slot = "counts") 
+sc.dat[1:4,1:4]
+sc.dat<-t(sc.dat)
+sc.dat[1:4,1:4]
+cell.type.labels<-data.frame(seuratdata@meta.data[,22])
+rownames(cell.type.labels) <- rownames(seuratdata@meta.data)
+colnames(cell.type.labels) <- colnames(seuratdata@meta.data)[22]
+cell.type.labels<-t(cell.type.labels)
+plot.cor.phi (input=sc.dat, 
+              input.labels=cell.type.labels, 
+              title="celltype",
+              pdf.prefix="gbm.cor.ct",
+              cexRow=0.5, cexCol=0.5,)
+sc.stat <- plot.scRNA.outlier(
+  input=sc.dat, 
+  cell.type.labels=cell.type.labels,
+  species="hs", 
+  return.raw=TRUE 
+)
+head(sc.stat)
+bk.dat<-t(tpm_all2)
+nrow(bk.dat)
+bk.dat[is.na(bk.dat)] <- apply(bk.dat, 2, median, na.rm = TRUE)
+bk.stat <- plot.bulk.outlier(
+  bulk.input=bk.dat,
+  sc.input=sc.dat, 
+  cell.type.labels=cell.type.labels,
+  species="hs",
+  return.raw=TRUE
+)
+head(bk.stat)
+sc.dat.filtered <- cleanup.genes (input=sc.dat,
+                                  input.type="count.matrix",
+                                  species="hs", 
+                                  gene.group=c( "Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY") ,
+                                  exp.cells=5)
+dim(sc.dat.filtered)
+plot.bulk.vs.sc (sc.input = sc.dat.filtered,
+                 bulk.input = bk.dat
+)
+sc.dat.filtered.pc <-  select.gene.type (sc.dat.filtered,
+                                         gene.type = "protein_coding")
+myPrism <- new.prism(
+  reference=sc.dat.filtered.pc, 
+  mixture=bk.dat,
+  input.type="count.matrix", 
+  cell.type.labels = cell.type.labels, 
+  cell.state.labels=NULL,
+  key=NULL,
+  outlier.cut=0.0001,
+  outlier.fraction=0.0001,
+)
+rm(seuratdata)
+bp.res <- run.prism(prism = myPrism) 
+bp.res
+theta <- get.fraction (bp=bp.res,
+                       which.theta="final",
+                       state.or.type="type")
+library(tinyarray)
+library(survival)
+library(survminer)
+clin_merge2$OS.time <- as.numeric(as.character(clin_merge2$OS.time))
+data<-clin_merge2
+fit <- survfit(Surv(data$OS.time,data$OS) ~ group, data = data)
+p <- ggsurvplot(fit,
+                data         = data,
+                pval.method  = TRUE,
+                pval         = TRUE,
+                palette      = c("#fe7272", "#4071a1"),
+                xlab         = "Time (Days)",
+                ylab         = "Overall survival",
+                legend.title = " Epithelial_IgG",
+                legend.labs  = c("high", "low"),
+                font.family  = "Arial Narrow",
+                ggplot.theme = my_theme)
+p$plot <- p$plot +
+  theme(
+    legend.title = element_text(family = "Arial Narrow", face = "bold", color = "black",size = 12),
+    legend.text  = element_text(family = "Arial Narrow", face = "bold", color = "black",size = 12)
+  )
+KMplot_IgG<-p
+KMplot_IgG$plot
+#CNV
+library(rjags)
+library(infercnv)
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(AnnoProbe)
+table(seuratdata@meta.data[["celltype"]])
+seuratdata_EP<-subset(seuratdata,subset = SCT_snn_res.0.4 == "6"|
+                        SCT_snn_res.0.4 == "11"|
+                        SCT_snn_res.0.4 == "17"|
+                        SCT_snn_res.0.4 == "18"|
+                        SCT_snn_res.0.4 == "16"|
+                        SCT_snn_res.0.4 == "9"|
+                        SCT_snn_res.0.4 == "13")
+seuratdata_T <- subset(seuratdata_T, subset = celltype == "γδ T Cells")
+df<-seuratdata@meta.data
+df1<-seuratdata_EP@meta.data
+df2<-seuratdata_T@meta.data
+df$kkk <- ifelse(rownames(df) %in% rownames(df1), "A", "B")
+df$kkk <- ifelse(rownames(df) %in% rownames(df2), "A", df$kkk)
+table(df$kkk)
+seuratdata@meta.data<-df
+seuratdata <- subset(seuratdata, subset = kkk == "A")
+df<-seuratdata@meta.data
+df$forCNV <- ifelse(rownames(df) %in% rownames(df1), 
+                    df1$celltype[match(rownames(df), rownames(df1))], 
+                    "T Cells")
+df <- df %>%
+  mutate(forCNV = ifelse(SCT_snn_res.0.4 == 16,
+                         "Epithelial_IgG",
+                         forCNV)) 
+table(df$forCNV)
+seuratdata@meta.data<-df
+rm(seuratdata_EP)
+rm(seuratdata_T)
+table(seuratdata@meta.data[["forCNV"]])
+setwd("~/inferCNV")
+exprMatrix <- as.matrix(GetAssayData(seuratdata, slot='counts'))
+cellAnnota <- subset(seuratdata@meta.data,select='forCNV')
+dir.create('seuratdata_infercnv/')
+write.table(cellAnnota,file ="seuratdata_infercnv/groupFiles.txt",sep = '\t',col.names = F)
+geneInfor=annoGene(rownames(seuratdata),"SYMBOL",'human')
+colnames(geneInfor)
+geneInfor=geneInfor[with(geneInfor, order(chr, start)),c(1,4:6)]
+geneInfor=geneInfor[!duplicated(geneInfor[,1]),]
+length(unique(geneInfor[,1]))
+head(geneInfor)
+write.table(geneInfor, 'seuratdata_infercnv/geneLocate.txt', row.names=F, col.names=F, sep='\t')
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=exprMatrix,
+                                    annotations_file="seuratdata_infercnv/groupFiles.txt",
+                                    delim="\t",
+                                    gene_order_file= "seuratdata_infercnv/geneLocate.txt",
+                                    ref_group_names="T Cells")
+gc()
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=0.1, 
+                             out_dir=  'seuratdata_infercnv/output' ,  
+                             hclust_method="ward.D2", plot_steps=F,denoise=TRUE,
+                             HMM=F,  
+                             num_threads=10)
+save(infercnv_obj,file = "~/figure/RData/infercnv_obj.RData")
+infercnv_obj <- readRDS('~/inferCNV/seuratdataCNV_infercnv/output/run.final.infercnv_obj')
+expr <- infercnv_obj@expr.data
+fivenum(expr)
+expr[1:4,1:4]
+data_cnv <- as.data.frame(expr)
+dim(expr)
+colnames(data_cnv)
+rownames(data_cnv)
+colnames(seuratdata) <- gsub("-","_",colnames(seuratdata))
+meta <- seuratdata@meta.data
+if(T){
+  tmp1 = expr[,infercnv_obj@reference_grouped_cell_indices[["T Cells"]]]
+  tmp = tmp1
+  down=mean(rowMeans(tmp)) - 2 * mean( apply(tmp, 1, sd))
+  up=mean(rowMeans(tmp)) + 2 * mean( apply(tmp, 1, sd))
+  oneCopy=up-down
+  oneCopy
+  a1= down- 2*oneCopy
+  a2= down- 1*oneCopy
+  down;up
+  a3= up +  1*oneCopy
+  a4= up + 2*oneCopy 
+  cnv_score_table<-infercnv_obj@expr.data
+  cnv_score_table[1:4,1:4]
+  cnv_score_mat <- as.matrix(cnv_score_table)
+  cnv_score_table[cnv_score_mat > 0 & cnv_score_mat < a2] <- "A" #complete loss. 2pts
+  cnv_score_table[cnv_score_mat >= a2 & cnv_score_mat < down] <- "B" #loss of one copy. 1pts
+  cnv_score_table[cnv_score_mat >= down & cnv_score_mat <  up ] <- "C" #Neutral. 0pts
+  cnv_score_table[cnv_score_mat >= up  & cnv_score_mat <= a3] <- "D" #addition of one copy. 1pts
+  cnv_score_table[cnv_score_mat > a3  & cnv_score_mat <= a4 ] <- "E" #addition of two copies. 2pts
+  cnv_score_table[cnv_score_mat > a4] <- "F" #addition of more than two copies. 2pts
+  table(cnv_score_table[,1])
+  cnv_score_table_pts <- cnv_score_mat
+  rm(cnv_score_mat)
+  cnv_score_table_pts[cnv_score_table == "A"] <- 2
+  cnv_score_table_pts[cnv_score_table == "B"] <- 1
+  cnv_score_table_pts[cnv_score_table == "C"] <- 0
+  cnv_score_table_pts[cnv_score_table == "D"] <- 1
+  cnv_score_table_pts[cnv_score_table == "E"] <- 2
+  cnv_score_table_pts[cnv_score_table == "F"] <- 2
+  cnv_score_table_pts[1:4,1:4]
+  str(as.data.frame(cnv_score_table_pts[1:4,1:4])) 
+  cell_scores_CNV <- as.data.frame(colSums(cnv_score_table_pts))
+  
+  colnames(cell_scores_CNV) <- "cnv_score" 
+}
+head(cell_scores_CNV) 
+score=cell_scores_CNV
+head(score)
+meta$totalCNV = score[match(colnames(seuratdata),
+                            rownames(score)),1] 
+table(meta$forCNV)
+p <- ggplot(meta, aes(x= forCNV, 
+                      y=totalCNV, 
+                      fill=forCNV)) +
+  geom_boxplot()
+print(p)
+library(ggplot2)
+library(ggsignif)
+p <- ggplot(meta, aes(x= forCNV, 
+                      y=totalCNV, 
+                      fill=forCNV)) +
+  geom_violin(alpha=0.4)+ 
+  stat_boxplot(geom="errorbar",position = position_dodge(width = 0.1),width=0.1)+ 
+  geom_boxplot(alpha=0.5,outlier.size=0, size=0.3, width=0.3)+ 
+  theme_bw()
+print(p) 
+df<-seuratdata@meta.data
+rownames(df) <- as.character(rownames(df))
+rownames(meta) <- as.character(rownames(meta))
+df$totalCNV <- meta[match(rownames(df), rownames(meta)), "totalCNV"]
+seuratdata@meta.data<-df
+Idents(seuratdata)<- "forCNV"
+Idents(seuratdata) <- factor(Idents(seuratdata), levels =  c("Epithelial_META",
+                                                             "Epithelial_IgG",
+                                                             "Epithelial_EMT",
+                                                             "Epithelial_PROL",
+                                                             "T Cells") )
+table(Idents(seuratdata))
+my.colors <- c('#9bc5cc', '#e4c896', '#c8aec8', '#78ab70',"#e7b2b4")
+vln_CNV<-VlnPlot(seuratdata,
+                 features = "totalCNV",
+                 pt.size = 0,
+                 cols = my.colors) +           
+  theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        legend.position = "right")
+my_comparisons <- combn(as.character(unique(seuratdata$forCNV)),2,simplify = F)
+my_comparisons
+my_comparisons <- my_comparisons[-c(1,2,3,5,6,8)]
+my_comparisons
+vln_CNV <- VlnPlot(seuratdata,
+                   features = "totalCNV",
+                   pt.size = 0,
+                   cols = my.colors) +
+  geom_boxplot(alpha = 0.5, outlier.size = 0, size = 0.3, width = 0.3) +
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    legend.position = "right",
+    text = element_text(size   = 10,
+                        family = "Arial Narrow",
+                        face   = "bold",
+                        color  = "black"),
+    axis.text.x = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.text.y = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.title  = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black")
+  )&  
+  stat_compare_means(method="t.test",hide.ns = F,   
+                     comparisons = my_comparisons,                   
+                     label="p.signif",                   
+                     bracket.size=0.8,                  
+                     tip.length=0, 
+                     size=6)&  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
+vln_CNV
+library(ggplot2)
+library(ggpubr)  
+library(gghalves)
+table(meta$forCNV)
+meta$forCNV <- factor(meta$forCNV,
+                      levels = c("T Cells","Epithelial_META","Epithelial_IgG",
+                                 "Epithelial_EMT","Epithelial_PROL"))
+my.colors <- c("#B07AA1","#E68A94","#4A7ACC","#4CA373","#D9A501")
+my.colors <- adjustcolor(my.colors, alpha.f = 0.36)
+vln_CNV <-ggplot(meta, aes(x = forCNV, y = totalCNV, fill = forCNV, color = forCNV)) +
+  geom_half_violin(
+    side = "r",
+    trim = FALSE,
+    adjust = 1.5,
+    position = position_nudge(x = 0.1),
+    alpha = 0.7
+  ) +
+  geom_boxplot(
+    width = 0.1,
+    size = 0.5,
+    outlier.size = 1,
+    alpha = 0.9,
+    color = "black"
+  ) +
+  geom_point(
+    aes(x = as.numeric(forCNV) - 0.2),
+    size = 1.5,
+    position = position_jitter(width = 0.07)
+  ) +
+  scale_fill_manual(values = my.colors) +
+  scale_color_manual(values = my.colors) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    legend.position = "right",
+    text = element_text(size = 10, family = "Arial Narrow", face = "bold", color = "black"),
+    axis.text.x = element_text(size = 10, family = "Arial Narrow", face = "bold", color = "black"),
+    axis.text.y = element_text(size = 10, family = "Arial Narrow", face = "bold", color = "black"),
+    axis.title = element_text(size = 10, family = "Arial Narrow", face = "bold", color = "black")
+  ) +
+  stat_compare_means(
+    method = "t.test",
+    hide.ns = FALSE,
+    comparisons = my_comparisons,
+    label = "p.signif",
+    bracket.size = 0.8,
+    tip.length = 0,
+    size = 6
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
+vln_CNV_rot <-
+  vln_CNV +               
+  coord_flip() +
+  theme(axis.title.x = element_text(angle = 90, vjust = 0.5),
+        axis.title.y = element_text(angle = 90, vjust = 0.5))
+#CytoTRACE2
+library(CytoTRACE2) 
+library(readr)
+library(tibble)
+library(Seurat) 
+library(tidyverse)
+library(paletteer)
+library(BiocParallel)
+table(seuratdata@meta.data[["celltype"]])
+seuratdata<-subset(seuratdata,subset = SCT_snn_res.0.4 == "6"|
+                     SCT_snn_res.0.4 == "11"|
+                     SCT_snn_res.0.4 == "17"|
+                     SCT_snn_res.0.4 == "18"|
+                     SCT_snn_res.0.4 == "16"|
+                     SCT_snn_res.0.4 == "9"|
+                     SCT_snn_res.0.4 == "13")
+cytotrace <- cytotrace2(seuratdata, 
+                        species = "human",
+                        slot_type = "counts",
+                        is_seurat = TRUE,
+                        batch_size = 10000,
+                        smooth_batch_size = 1000,
+                        parallelize_models = TRUE,
+                        parallelize_smoothing = TRUE,
+                        ncores = NULL,
+                        seed = 14) 
+Idents(cytotrace)<- "celltype"
+cytotrace$celltype <- factor(cytotrace$celltype,
+                                  levels = c("Epithelial_META",
+                                             "Epithelial_IgG",
+                                             "Epithelial_EMT",
+                                             "Epithelial_PROL"))
+table(Idents(cytotrace))
+my.colors <- c("#66C5CC","#0260A0","#00B9E3","#619CFF")
+my_comparisons <- combn(as.character(unique(cytotrace$celltype)),2,simplify = F)
+my_comparisons
+my_comparisons <- my_comparisons[-c(1,3,6)]
+my_comparisons
+vln_CytoTRACE2 <- VlnPlot(cytotrace,
+                          features = "CytoTRACE2_Score",
+                          pt.size = 0,
+                          cols = my.colors) +
+  #geom_boxplot(alpha = 0.5, outlier.size = 0, size = 0.3, width = 0.3) +
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    legend.position = "right",
+    text = element_text(size   = 10,
+                        family = "Arial Narrow",
+                        face   = "bold",
+                        color  = "black"),
+    axis.text.x = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.text.y = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black"),
+    axis.title  = element_text(size   = 10,
+                               family = "Arial Narrow",
+                               face   = "bold",
+                               color  = "black")
+  )&  
+  stat_compare_means(method="t.test",hide.ns = F,   
+                     comparisons = my_comparisons,                   
+                     label="p.signif",                   
+                     bracket.size=0.8,                  
+                     tip.length=0, 
+                     size=6)&  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
